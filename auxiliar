@@ -1,16 +1,9 @@
-# Filtra apenas os erros específicos que queremos investigar
-# Exemplo: Onde era Cartão mas o modelo disse Empréstimos
-filtro_erro = (df_results['REAL_FAM'] == 'Cartão') & (df_results['PRED_FAM'].str.contains('Empréstimos'))
+# Supondo que df_novo tenha os 30k + 9k
+contagem = df_novo['TARGET_FULL'].value_counts()
 
-# Mostra o texto do cliente e o que aconteceu
-erros_detalhados = df_results[filtro_erro].copy()
-erros_detalhados = erros_detalhados[['REAL_FULL', 'PRED_FULL']] # Coloque a coluna de texto aqui também
+print(f"Total de Categorias: {len(contagem)}")
+print(f"Categorias com menos de 10 exemplos: {len(contagem[contagem < 10])}")
 
-# Precisamos recuperar o texto original (assumindo que os índices batem com X_val)
-# Se você usou train_test_split com shuffle, o índice foi preservado no y_val
-# Vamos tentar recuperar o texto original do df_historico usando o índice
-erros_detalhados['TEXTO_ORIGINAL'] = df_historico.loc[y_val.index, 'TEXTO_CLIENTE']
-
-pd.set_option('display.max_colwidth', None)
-print("--- FRASES QUE ERAM CARTÃO E FORAM PARA EMPRÉSTIMO ---")
-print(erros_detalhados['TEXTO_ORIGINAL'].head(10))
+# DICA DE OURO:
+# Se você tiver muitas categorias com < 10 exemplos, o modelo NÃO vai aprender elas.
+# Elas vão apenas gerar ruído e confundir as categorias maiores.
