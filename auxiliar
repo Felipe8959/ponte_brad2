@@ -1,0 +1,35 @@
+import re
+
+def limpar_texto_bert(texto):
+    if not isinstance(texto, str):
+        return ""
+    
+    # 1. Remover tags HTML/XML (comuns em sistemas de ouvidoria)
+    texto = re.sub(r'<[^>]+>', ' ', texto)
+    
+    # 2. Mascarar CPFs (Formato com ou sem pontuação)
+    # Isso ajuda o modelo a generalizar: "Problema no CPF" e não "Problema no 123..."
+    texto = re.sub(r'\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b', '[CPF]', texto)
+    
+    # 3. Mascarar CNPJs
+    texto = re.sub(r'\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b', '[CNPJ]', texto)
+    
+    # 4. Opcional: Mascarar Datas e Valores monetários se achar necessário
+    # texto = re.sub(r'R\$\s?\d+([.,]\d+)?', '[VALOR]', texto)
+    
+    # 5. Remover excesso de espaços em branco
+    texto = re.sub(r'\s+', ' ', texto).strip()
+    
+    return texto
+
+# --- TESTE ---
+exemplo = """
+Prezados,<br>Não reconheço a compra de R$ 500,00 no meu cartão.<br>
+Meu CPF é 123.456.789-00.  Aguardo    retorno.
+"""
+
+print("Original:")
+print(exemplo)
+print("-" * 30)
+print("Limpo para BERT:")
+print(limpar_texto_bert(exemplo))
