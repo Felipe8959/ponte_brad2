@@ -1,9 +1,32 @@
-# Supondo que df_novo tenha os 30k + 9k
-contagem = df_novo['TARGET_FULL'].value_counts()
+# ==============================================================================
+# ENRIQUECENDO A TABELA DE RESULTADOS
+# ==============================================================================
 
-print(f"Total de Categorias: {len(contagem)}")
-print(f"Categorias com menos de 10 exemplos: {len(contagem[contagem < 10])}")
+# 1. Primeiro, garantimos que o df_results tem os dados básicos (Real vs Predito)
+#    (Supondo que você já rodou a predição: y_pred = clf.predict(X_val))
+df_results = pd.DataFrame({
+    'REAL_FULL': y_val,
+    'PRED_FULL': y_pred
+})
 
-# DICA DE OURO:
-# Se você tiver muitas categorias com < 10 exemplos, o modelo NÃO vai aprender elas.
-# Elas vão apenas gerar ruído e confundir as categorias maiores.
+# 2. O PULO DO GATO: Usar o índice do y_val para buscar os dados originais
+#    O .loc[] busca exatamente as linhas que foram separadas para teste.
+
+# Troque 'df_manif' pelo nome do seu dataframe original completo
+# Troque as colunas pelos nomes exatos que aparecem no seu print ('Sacl Protocolo...', etc.)
+indices_teste = y_val.index
+
+print("Recuperando textos e protocolos originais...")
+df_results['PROTOCOLO'] = df_manif.loc[indices_teste, 'Sacl Protocolo Manifestacao']
+df_results['TEXTO_CLIENTE'] = df_manif.loc[indices_teste, 'texto_cliente'] # ou o nome correto da coluna de texto
+
+# 3. Organizando as colunas para facilitar a leitura (Colocar texto primeiro)
+colunas_ordem = ['PROTOCOLO', 'TEXTO_CLIENTE', 'REAL_FULL', 'PRED_FULL']
+df_results = df_results[colunas_ordem]
+
+# ==============================================================================
+# EXPORTAR PARA ANALISAR NO EXCEL (Recomendado)
+# ==============================================================================
+# Agora você pode filtrar no Excel onde REAL != PRED e ler o texto.
+df_results.to_excel("analise_erros_completa.xlsx", index=False)
+print("Arquivo 'analise_erros_completa.xlsx' gerado com sucesso!")
