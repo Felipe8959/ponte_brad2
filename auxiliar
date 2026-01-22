@@ -1,65 +1,16 @@
-import pandas as pd
-from sklearn.metrics import accuracy_score
+# Filtra apenas os erros específicos que queremos investigar
+# Exemplo: Onde era Cartão mas o modelo disse Empréstimos
+filtro_erro = (df_results['REAL_FAM'] == 'Cartão') & (df_results['PRED_FAM'].str.contains('Empréstimos'))
 
-# ==============================================================================
-# 1. GERAÇÃO DAS PREDIÇÕES (Assumindo que você já treinou o 'clf')
-# ==============================================================================
-print("1. Gerando predições para a base de teste (Validação)...")
+# Mostra o texto do cliente e o que aconteceu
+erros_detalhados = df_results[filtro_erro].copy()
+erros_detalhados = erros_detalhados[['REAL_FULL', 'PRED_FULL']] # Coloque a coluna de texto aqui também
 
-# Faz a predição no conjunto de teste que separamos antes (X_val)
-y_pred = clf.predict(X_val)
+# Precisamos recuperar o texto original (assumindo que os índices batem com X_val)
+# Se você usou train_test_split com shuffle, o índice foi preservado no y_val
+# Vamos tentar recuperar o texto original do df_historico usando o índice
+erros_detalhados['TEXTO_ORIGINAL'] = df_historico.loc[y_val.index, 'TEXTO_CLIENTE']
 
-# ==============================================================================
-# 2. PREPARAÇÃO DOS DADOS (O Pulo do Gato)
-# ==============================================================================
-# Criamos um DataFrame temporário para facilitar a manipulação
-df_results = pd.DataFrame({
-    'REAL_FULL': y_val,   # O que veio do df_historico
-    'PRED_FULL': y_pred   # O que o robô chutou
-})
-
-# Função auxiliar para quebrar a string "Família | Produto | Assunto"
-# O expand=True cria novas colunas automaticamente
-def quebrar_hierarquia(series):
-    return series.str.split(' \| ', expand=True)
-
-# Quebrando a coluna REAL em 3
-df_results[['REAL_FAM', 'REAL_PROD', 'REAL_ASS']] = quebrar_hierarquia(df_results['REAL_FULL'])
-
-# Quebrando a coluna PREDITA em 3
-df_results[['PRED_FAM', 'PRED_PROD', 'PRED_ASS']] = quebrar_hierarquia(df_results['PRED_FULL'])
-
-# ==============================================================================
-# 3. CÁLCULO DAS MÉTRICAS
-# ==============================================================================
-print("\n--- RELATÓRIO DE ACURÁCIA POR NÍVEL HIERÁRQUICO ---\n")
-
-# Nível 1: Família
-acc_fam = accuracy_score(df_results['REAL_FAM'], df_results['PRED_FAM'])
-print(f"Nível 1 (Família): {acc_fam:.2%} de acerto")
-print("   -> Ex: Acertou que é 'Cartão', mesmo errando o resto.")
-
-# Nível 2: Produto
-acc_prod = accuracy_score(df_results['REAL_PROD'], df_results['PRED_PROD'])
-print(f"Nível 2 (Produto): {acc_prod:.2%} de acerto")
-print("   -> Ex: Acertou que é 'Cartão' e 'Contestação'.")
-
-# Nível 3: Assunto (Geralmente igual ao score global do clf.score)
-acc_ass = accuracy_score(df_results['REAL_ASS'], df_results['PRED_ASS'])
-print(f"Nível 3 (Assunto): {acc_ass:.2%} de acerto")
-print("   -> Ex: Acertou a linha inteira, até o detalhe final.")
-
-# ==============================================================================
-# 4. ANÁLISE DE ERROS (Onde o modelo confundiu?)
-# ==============================================================================
-print("\n--- ONDE O MODELO MAIS ERROU (Top 5 Confusões de Família) ---")
-
-# Filtra apenas onde errou a Família
-erros_familia = df_results[df_results['REAL_FAM'] != df_results['PRED_FAM']]
-
-if not erros_familia.empty:
-    # Cria uma coluna "Real -> Predito" para ver o padrão do erro
-    erros_familia['CONFUSAO'] = erros_familia['REAL_FAM'] + " -> foi classificado como -> " + erros_familia['PRED_FAM']
-    print(erros_familia['CONFUSAO'].value_counts().head(5))
-else:
-    print("Parabéns! O modelo não errou nenhuma Família nos dados de teste.")
+pd.set_option('display.max_colwidth', None)
+print("--- FRASES QUE ERAM CARTÃO E FORAM PARA EMPRÉSTIMO ---")
+print(erros_detalhados['TEXTO_ORIGINAL'].head(10))
