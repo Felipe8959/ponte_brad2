@@ -1,0 +1,30 @@
+import mlflow
+import mlflow.sklearn
+from mlflow.models.signature import infer_signature # <--- IMPORTANTE
+
+# ... (seu código de treino fit e score continua igual) ...
+
+with mlflow.start_run(run_name="Treino_Hibrido_BERT_MLP") as run:
+    
+    # 1. Treina (igual você já fez)
+    clf.fit(X_train, y_train)
+    
+    # 2. CRIA A ASSINATURA (O passo que faltou)
+    # Pegamos 5 exemplos do treino e o que o modelo preveria para eles.
+    # O MLflow olha para isso e entende: "Ah, a entrada é uma matriz e a saída é string"
+    input_exemplo = X_train[:5]
+    prediction_exemplo = clf.predict(input_exemplo)
+    
+    signature = infer_signature(input_exemplo, prediction_exemplo)
+    
+    # 3. Salva com a assinatura obrigatória
+    print("Registrando modelo no Unity Catalog...")
+    mlflow.sklearn.log_model(
+        sk_model=clf, 
+        artifact_path="model",
+        registered_model_name="pr_explo.d4960s010_ouv_ics.categ_sacl_embeddings",
+        signature=signature,      # <--- ADICIONE ISTO
+        input_example=input_exemplo # <--- Boa prática: salva um exemplo visual
+    )
+    
+    print(f"Sucesso! Modelo salvo com assinatura.")

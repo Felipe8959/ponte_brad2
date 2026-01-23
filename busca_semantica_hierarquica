@@ -1,0 +1,111 @@
+from sentence_transformers import SentenceTransformer, util
+import torch
+
+# 1. Carregar o Modelo (apontando para sua pasta local ou baixando se não tiver)
+caminho_modelo = './modelo_mpnet_v2_local' # Ou 'sentence-transformers/paraphrase-multilingual-mpnet-base-v2'
+print("Carregando modelo...")
+model = SentenceTransformer(caminho_modelo)
+
+# 2. Definindo a Taxonomia (A Árvore de Decisão)
+# Em produção, isso viria do seu banco de dados ou JSON
+taxonomia_bancaria = {
+    "Cartão de Crédito": {
+        "Fatura e Cobrança": [
+            "Juros de rotativo não reconhecidos",
+            "Cobrança de anuidade indevida",
+            "Fatura não recebida no e-mail",
+            "Pagamento em duplicidade"
+        ],
+        "Entrega e Logística": [
+            "Cartão não chegou no endereço",
+            "Senha bloqueada ou extraviada",
+            "Cartão entregue com chip danificado"
+        ],
+        "Fraude e Segurança": [
+            "Compra não reconhecida (presencial)",
+            "Compra não reconhecida (internet)",
+            "Cartão clonado"
+        ]
+    },
+    "Conta Corrente": {
+        "Tarifas": [
+            "Cesta de serviços cobrada indevidamente",
+            "Tarifa de saque excedente"
+        ],
+        "Pix e Transferências": [
+            "Pix não creditado na conta destino",
+            "Chave Pix cadastrada sem autorização",
+            "Golpe do Pix ou Engenharia Social"
+        ]
+    },
+    "Investimentos": {
+        "Renda Fixa": [
+            "Resgate antecipado com penalidade",
+            "Erro no cálculo de rentabilidade"
+        ]
+    }
+}
+
+def classificar_hierarquico(texto_reclamacao):
+    """
+    Função que desce os níveis da árvore para encontrar a melhor classificação.
+    """
+    print(f"\n--- Processando: '{texto_reclamacao}' ---")
+    
+    # Passo A: Gerar o embedding da reclamação (uma única vez)
+    reclamacao_emb = model.encode(texto_reclamacao, convert_to_tensor=True)
+
+    # --- NÍVEL 1: PRODUTO ---
+    opcoes_n1 = list(taxonomia_bancaria.keys())
+    
+    # Codifica as opções do Nível 1
+    emb_n1 = model.encode(opcoes_n1, convert_to_tensor=True)
+    
+    # Busca o vencedor do Nível 1
+    hits_n1 = util.semantic_search(reclamacao_emb, emb_n1, top_k=1)
+    idx_vencedor_n1 = hits_n1[0][0]['corpus_id']
+    score_n1 = hits_n1[0][0]['score']
+    produto_vencedor = opcoes_n1[idx_vencedor_n1]
+    
+    print(f"1. Produto Detectado: {produto_vencedor} (Confiança: {score_n1:.2f})")
+
+    # --- NÍVEL 2: ASSUNTO (Filtrado pelo Produto) ---
+    # Aqui está o segredo: Só olhamos o que existe dentro do produto vencedor
+    sub_arvore = taxonomia_bancaria[produto_vencedor]
+    opcoes_n2 = list(sub_arvore.keys())
+    
+    emb_n2 = model.encode(opcoes_n2, convert_to_tensor=True)
+    
+    hits_n2 = util.semantic_search(reclamacao_emb, emb_n2, top_k=1)
+    idx_vencedor_n2 = hits_n2[0][0]['corpus_id']
+    score_n2 = hits_n2[0][0]['score']
+    assunto_vencedor = opcoes_n2[idx_vencedor_n2]
+    
+    print(f"2. Assunto Detectado: {assunto_vencedor} (Confiança: {score_n2:.2f})")
+
+    # --- NÍVEL 3: MOTIVO ESPECÍFICO (Filtrado pelo Assunto) ---
+    opcoes_n3 = sub_arvore[assunto_vencedor] # Lista final de motivos
+    
+    emb_n3 = model.encode(opcoes_n3, convert_to_tensor=True)
+    
+    hits_n3 = util.semantic_search(reclamacao_emb, emb_n3, top_k=1)
+    idx_vencedor_n3 = hits_n3[0][0]['corpus_id']
+    score_n3 = hits_n3[0][0]['score']
+    motivo_final = opcoes_n3[idx_vencedor_n3]
+    
+    print(f"3. Classificação Final: {motivo_final} (Confiança: {score_n3:.2f})")
+    
+    return {
+        "N1": produto_vencedor,
+        "N2": assunto_vencedor,
+        "N3": motivo_final,
+        "Score_Final": score_n3
+    }
+
+# --- TESTANDO COM EXEMPLOS REAIS ---
+
+# Caso 1: Problema claro de Pix
+classificar_hierarquico("Fiz uma transferência pelo celular para meu irmão e o dinheiro sumiu da minha conta mas não caiu pra ele.")
+
+# Caso 2: Problema de Cartão
+classificar_hierarquico("Veio cobrando uma compra das casas bahia que eu nunca fiz no meu cartão.")
