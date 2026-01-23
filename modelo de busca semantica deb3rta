@@ -1,0 +1,41 @@
+from sentence_transformers import SentenceTransformer, util
+import torch
+
+# 1. Carregar o modelo especialista (o DeBERTa financeiro funciona bem aqui)
+# Nota: Para sentence-transformers, idealmente usamos modelos fine-tuned para similaridade,
+# mas podemos adaptar o DeBERTa ou usar um multilíngue forte como 'paraphrase-multilingual-mpnet-base-v2'
+model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2') 
+
+# 2. Sua base de conhecimento (As 2.000 classes)
+# IMPORTANTE: As descrições precisam ser claras!
+classes_manifestacao = {
+    "COD_001": "Cobrança indevida de anuidade no cartão de crédito",
+    "COD_002": "Demora na entrega da segunda via do cartão",
+    "COD_003": "Aplicativo do banco fora do ar ou apresentando erro no login",
+    "COD_004": "Gerente da conta não responde mensagens ou atende mal",
+    # ... imagine mais 1996 classes aqui ...
+}
+
+ids = list(classes_manifestacao.keys())
+descricoes = list(classes_manifestacao.values())
+
+print("Gerando embeddings das classes (Indexação)...")
+embeddings_classes = model.encode(descricoes, convert_to_tensor=True)
+
+# 3. Simulação de uma nova reclamação chegando
+nova_reclamacao = "Estou tentando acessar minha conta pelo celular desde cedo e só dá erro de conexão, preciso pagar uma conta!"
+
+print("Processando nova reclamação...")
+embedding_reclamacao = model.encode(nova_reclamacao, convert_to_tensor=True)
+
+# 4. Busca Semântica (Cálculo de Distância)
+hits = util.semantic_search(embedding_reclamacao, embeddings_classes, top_k=3)
+
+# 5. Resultado
+print(f"\nReclamação: '{nova_reclamacao}'")
+print("\nTop 3 Classificações Sugeridas:")
+for hit in hits[0]:
+    id_classe = ids[hit['corpus_id']]
+    descricao = descricoes[hit['corpus_id']]
+    score = hit['score']
+    print(f"[{score:.4f}] {id_classe}: {descricao}")
