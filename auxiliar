@@ -1,30 +1,84 @@
-import mlflow
-import mlflow.sklearn
-from mlflow.models.signature import infer_signature # <--- IMPORTANTE
+from pyspark.sql import functions as F
 
-# ... (seu código de treino fit e score continua igual) ...
+# 1. Carregar as bases (Exemplo lendo do catálogo)
+# Assumindo que você quer apenas as interações que geraram reclamação (conforme "já cruzada")
+# Se quiser TODAS interações, remova o filtro de reclamação.
 
-with mlflow.start_run(run_name="Treino_Hibrido_BERT_MLP") as run:
-    
-    # 1. Treina (igual você já fez)
-    clf.fit(X_train, y_train)
-    
-    # 2. CRIA A ASSINATURA (O passo que faltou)
-    # Pegamos 5 exemplos do treino e o que o modelo preveria para eles.
-    # O MLflow olha para isso e entende: "Ah, a entrada é uma matriz e a saída é string"
-    input_exemplo = X_train[:5]
-    prediction_exemplo = clf.predict(input_exemplo)
-    
-    signature = infer_signature(input_exemplo, prediction_exemplo)
-    
-    # 3. Salva com a assinatura obrigatória
-    print("Registrando modelo no Unity Catalog...")
-    mlflow.sklearn.log_model(
-        sk_model=clf, 
-        artifact_path="model",
-        registered_model_name="pr_explo.d4960s010_ouv_ics.categ_sacl_embeddings",
-        signature=signature,      # <--- ADICIONE ISTO
-        input_example=input_exemplo # <--- Boa prática: salva um exemplo visual
+df_totem = spark.table("catalogo.schema.tabela_totem") \
+    .select("id_cliente", "data_interacao") \
+    .withColumn("canal", F.lit("TOTEM"))
+
+df_ura = spark.table("catalogo.schema.tabela_ura") \
+    .select("id_cliente", "data_interacao") \
+    .withColumn("canal", F.lit("URA"))
+
+df_chat = spark.table("catalogo.schema.tabela_chat") \
+    .select("id_cliente", "data_interacao") \
+    .withColumn("canal", F.lit("CHAT"))
+
+# 2. Unificar as bases (Union All)
+df_unificado = df_totem.unionByName(df_ura).unionByName(df_chat)
+
+# 3. Criar a lógica da Jornada
+# O truque aqui é criar uma STRUCT (data, canal).
+# O Spark ordena structs pelo primeiro campo (data), garantindo a cronologia.
+
+df_jornada = df_unificado.groupBy("id_cliente").agg(
+    F.sort_array(
+        F.collect_list(F.struct("data_interacao", "canal"))
+    ).alias("lista_interacoes_ordenada")
+)
+
+# 4. Transformar a lista ordenada na string final "A -> B -> C"
+# Usamos a função 'transform' para extrair apenas o nome do canal da struct ordenada
+# E 'array_join' para criar a string com setas.
+
+df_final = df_jornada.withColumn(
+    "jornada_cliente",
+    F.array_join(
+        F.transform("lista_interacoes_ordenada", lambda x: x.canal),
+        " -> "
     )
-    
-    print(f"Sucesso! Modelo salvo com assinatura.")
+).select("id_cliente", "jornada_cliente")
+
+# Exibir resultado
+display(df_final)
+
+
+
+
+
+
+
+
+
+from pyspark.sql import functions as F
+
+# 1. Carregar as bases (garantindo que tenham o ID da Reclamação ou Data da Reclamação)
+df_totem = spark.table("tabela_totem_cruzada").select("id_cliente", "id_reclamacao", "data_interacao").withColumn("canal", F.lit("TOTEM"))
+df_ura   = spark.table("tabela_ura_cruzada").select("id_cliente", "id_reclamacao", "data_interacao").withColumn("canal", F.lit("URA"))
+df_chat  = spark.table("tabela_chat_cruzada").select("id_cliente", "id_reclamacao", "data_interacao").withColumn("canal", F.lit("CHAT"))
+
+# 2. Unificar (Union All)
+df_unificado = df_totem.unionByName(df_ura).unionByName(df_chat)
+
+# 3. Agrupar por CLIENTE e RECLAMAÇÃO específica
+# Importante: Filtramos para garantir que a interação aconteceu ANTES ou NA MESMA HORA da reclamação
+# (Assumindo que sua base cruzada já respeita a regra dos 30 dias, mas garante a cronologia)
+
+df_jornada = df_unificado.groupBy("id_cliente", "id_reclamacao").agg(
+    F.sort_array(
+        F.collect_list(F.struct("data_interacao", "canal"))
+    ).alias("lista_interacoes")
+)
+
+# 4. Criar a string da jornada
+df_final = df_jornada.withColumn(
+    "jornada_ate_reclamacao",
+    F.array_join(
+        F.transform("lista_interacoes", lambda x: x.canal),
+        " -> "
+    )
+)
+
+display(df_final)
