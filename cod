@@ -175,3 +175,236 @@ else:
     except Exception as e:
         print(f"Erro na execução incremental: {e}")
         raise e
+
+
+
+
+
+
+
+
+
+
+
+
+
+import os
+import mlflow.sklearn
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+
+# =============================================================================
+# 1. VARIÁVEIS DE CONFIGURAÇÃO DO MODELO E COLUNAS
+# =============================================================================
+# Defina aqui os nomes exatos das colunas da sua base de dados
+COL_PROTOCOLO = "id_reclamacao"  # O identificador único da manifestação
+COL_CPF       = "cpf"            # O identificador do cliente
+COL_TEXTO     = "texto_limpo"    # A coluna com o texto já pré-processado
+
+# Caminhos e Limiares
+PATH_MATRIZ_HISTORICO = "/dbfs/FileStore/ouvidoria/estado/X_historico.npz"
+TABELA_DELTA_RESULT   = "catalog.schema.reclamacoes_clusterizadas"
+TABELA_DELTA_RAW      = "catalog.schema.reclamacoes_raw"
+URI_MODELO_MLFLOW     = "models:/Vetorizador_Ouvidoria/Production"
+NOME_MODELO_REGISTRO  = "Vetorizador_Ouvidoria"
+
+LIMIAR_SIMILARIDADE   = 0.60
+EPS_EUCLIDIANO_FULL   = 0.894    # Distância equivalente a 0.60 de similaridade de cosseno
+
+# =============================================================================
+# 2. FUNÇÃO: CARGA FULL (DIA 0 - BASE HISTÓRICA)
+# =============================================================================
+def executar_carga_full_otimizada(df_pandas):
+    """Executa a Carga Full do Dia 0 com uso otimizado de RAM e extração do Protocolo Influenciador"""
+    num_docs = len(df_pandas)
+    print(f"Iniciando Carga FULL OTIMIZADA para {num_docs} registros...")
+    
+    # 1. Treinamento do TF-IDF e Registro
+    vectorizer = TfidfVectorizer(max_features=10000) 
+    X_historico = vectorizer.fit_transform(df_pandas[COL_TEXTO])
+    
+    print("Registrando modelo base no MLflow...")
+    with mlflow.start_run(run_name="Carga_Full_Ouvidoria"):
+        mlflow.sklearn.log_model(vectorizer, "tfidf_model", registered_model_name=NOME_MODELO_REGISTRO)
+    
+    # 2. Clusterização Global (Paralelizada)
+    print("Executando DBSCAN Global...")
+    dbscan = DBSCAN(eps=EPS_EUCLIDIANO_FULL, min_samples=3, metric='euclidean', algorithm='brute', n_jobs=-1)
+    df_pandas['cluster_id'] = dbscan.fit_predict(X_historico)
+    
+    # 3. Regra do Protocolo Influenciador em Lotes (Chunking)
+    print("Calculando influenciadores em lotes (Chunking)...")
+    protocolo_influenciador = [None] * num_docs
+    
+    cpfs_array = df_pandas[COL_CPF].values
+    protocolos_array = df_pandas[COL_PROTOCOLO].values
+    
+    tamanho_lote = 5000 # Processa 5.000 textos por vez (~2GB de RAM por loop)
+    
+    for inicio in range(0, num_docs, tamanho_lote):
+        fim = min(inicio + tamanho_lote, num_docs)
+        
+        # Isola o lote e faz o produto escalar contra a base toda
+        X_lote = X_historico[inicio:fim]
+        sim_lote = X_lote.dot(X_historico.T)
+        
+        # Converte apenas o resultado do lote para matriz densa para facilitar as máscaras do NumPy
+        sim_lote_dense = sim_lote.toarray() 
+        
+        for i in range(fim - inicio):
+            row_global = inicio + i
+            sim_row = sim_lote_dense[i]
+            
+            # Condição 1: Mesmos CPFs não são influenciadores (são reincidências)
+            mask_cpfs_diferentes = (cpfs_array != cpfs_array[row_global])
+            
+            # Condição 2: Similaridade precisa bater o limiar
+            mask_threshold = (sim_row >= LIMIAR_SIMILARIDADE)
+            
+            # Junta as máscaras
+            valid_mask = mask_cpfs_diferentes & mask_threshold
+            
+            if valid_mask.any():
+                # Isola apenas os valores válidos (os inválidos viram -1 para não atrapalhar o max)
+                sim_row_valid = np.where(valid_mask, sim_row, -1)
+                
+                # Pega o índice do texto que teve a MAIOR similaridade e atende às regras
+                best_match_idx = np.argmax(sim_row_valid)
+                
+                # Salva o protocolo desse texto como o influenciador
+                protocolo_influenciador[row_global] = protocolos_array[best_match_idx]
+
+    df_pandas['protocolo_influenciador'] = protocolo_influenciador
+    
+    # 4. Salva o Estado da Matriz
+    print("Salvando matriz de estado no DBFS...")
+    os.makedirs(os.path.dirname(PATH_MATRIZ_HISTORICO), exist_ok=True)
+    sp.save_npz(PATH_MATRIZ_HISTORICO, X_historico)
+    
+    return df_pandas
+
+# =============================================================================
+# 3. FUNÇÃO: CARGA INCREMENTAL (DIA A DIA)
+# =============================================================================
+def executar_carga_incremental(df_novos, df_historico, X_historico, vectorizer):
+    """Executa o processamento diário apenas para os casos novos"""
+    print(f"Iniciando Carga INCREMENTAL para {len(df_novos)} novos registros...")
+    
+    max_cluster_id = df_historico['cluster_id'].max()
+    max_cluster_id = 0 if pd.isna(max_cluster_id) or max_cluster_id == -1 else max_cluster_id
+    
+    # 1. Transformação e Similaridade
+    X_novos = vectorizer.transform(df_novos[COL_TEXTO])
+    similaridades = cosine_similarity(X_novos, X_historico)
+    
+    max_sim_indices = similaridades.argmax(axis=1)
+    max_sim_values = similaridades.max(axis=1)
+    
+    novos_clusters = []
+    protocolo_influenciador = []
+    indices_orfaos = []
+    
+    # 2. Regra de Herança e Protocolo Influenciador
+    for i in range(len(df_novos)):
+        sim_max = max_sim_values[i]
+        idx_hist = max_sim_indices[i]
+        
+        if sim_max >= LIMIAR_SIMILARIDADE:
+            # Herda o cluster do histórico
+            novos_clusters.append(df_historico.iloc[idx_hist]['cluster_id'])
+            
+            # Verifica a regra de CPFs distintos para salvar o protocolo
+            cpf_novo = df_novos.iloc[i][COL_CPF]
+            cpf_historico = df_historico.iloc[idx_hist][COL_CPF]
+            
+            if cpf_novo != cpf_historico:
+                # Salva o protocolo histórico que influenciou esse caso novo
+                protocolo_influenciador.append(df_historico.iloc[idx_hist][COL_PROTOCOLO])
+            else:
+                protocolo_influenciador.append(None)
+        else:
+            # Texto novo sem match forte
+            novos_clusters.append(-1)
+            protocolo_influenciador.append(None)
+            indices_orfaos.append(i)
+            
+    df_novos['cluster_id'] = novos_clusters
+    df_novos['protocolo_influenciador'] = protocolo_influenciador
+    
+    # 3. DBSCAN Delta para Casos Órfãos
+    if indices_orfaos:
+        print(f"Gerando novos clusters para {len(indices_orfaos)} casos órfãos...")
+        X_orfaos = X_novos[indices_orfaos]
+        dbscan = DBSCAN(eps=0.40, min_samples=3, metric='cosine') # eps é 1 - Similaridade (1 - 0.60)
+        clusters_orfaos = dbscan.fit_predict(X_orfaos)
+        
+        for idx_orf, cluster_db in enumerate(clusters_orfaos):
+            idx_orig = indices_orfaos[idx_orf]
+            if cluster_db != -1:
+                df_novos.at[idx_orig, 'cluster_id'] = max_cluster_id + cluster_db + 1
+                
+    # 4. Atualiza e Salva o Estado da Matriz
+    X_historico_atualizado = sp.vstack([X_historico, X_novos])
+    sp.save_npz(PATH_MATRIZ_HISTORICO, X_historico_atualizado)
+    
+    return df_novos
+
+# =============================================================================
+# 4. ORQUESTRAÇÃO PRINCIPAL (EXECUÇÃO NO DATABRICKS)
+# =============================================================================
+
+# Verifica se é a primeira execução olhando para o arquivo de estado físico
+is_primeira_execucao = not os.path.exists(PATH_MATRIZ_HISTORICO)
+
+# Lista de colunas que irão para a Tabela Delta final
+colunas_finais = [COL_PROTOCOLO, COL_CPF, 'cluster_id', 'protocolo_influenciador']
+
+if is_primeira_execucao:
+    print("ESTADO NÃO ENCONTRADO. Iniciando rotina de Dia 0 (Carga Full).")
+    
+    # Query para trazer toda a base histórica. 
+    # ORDER BY data garante que os textos mais antigos tenham chance de ser lidos como a "origem"
+    query_full = f"SELECT {COL_PROTOCOLO}, {COL_CPF}, {COL_TEXTO} FROM {TABELA_DELTA_RAW} ORDER BY data_ingestao ASC"
+    df_raw = spark.sql(query_full).toPandas()
+    
+    df_final = executar_carga_full_otimizada(df_raw)
+    
+    # Salva a Tabela Delta pela primeira vez (Modo Overwrite)
+    spark.createDataFrame(df_final[colunas_finais]) \
+        .write.format("delta").mode("overwrite").saveAsTable(TABELA_DELTA_RESULT)
+        
+    print("Carga Full concluída. Tabela Delta e Estado inicializados.")
+
+else:
+    print("ESTADO ENCONTRADO. Iniciando rotina Incremental.")
+    
+    try:
+        # Carrega o estado atual (Modelo do MLflow, Matriz Numpy e Metadados do Delta)
+        vectorizer = mlflow.sklearn.load_model(URI_MODELO_MLFLOW)
+        X_historico = sp.load_npz(PATH_MATRIZ_HISTORICO)
+        df_historico = spark.read.table(TABELA_DELTA_RESULT).select(COL_PROTOCOLO, COL_CPF, "cluster_id").toPandas()
+        
+        # Query para trazer APENAS os dados de hoje
+        query_incremental = f"SELECT {COL_PROTOCOLO}, {COL_CPF}, {COL_TEXTO} FROM {TABELA_DELTA_RAW} WHERE data_ingestao = CURRENT_DATE()"
+        df_novos = spark.sql(query_incremental).toPandas()
+        
+        if len(df_novos) == 0:
+            print("Nenhum registro novo hoje.")
+        else:
+            df_final = executar_carga_incremental(df_novos, df_historico, X_historico, vectorizer)
+            
+            # Faz o append dos resultados novos na Tabela Delta
+            spark.createDataFrame(df_final[colunas_finais]) \
+                .write.format("delta").mode("append").saveAsTable(TABELA_DELTA_RESULT)
+                
+            print("Carga Incremental concluída.")
+            
+    except Exception as e:
+        print(f"Erro na execução incremental: {e}")
+        raise e
+
+
