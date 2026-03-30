@@ -1,0 +1,177 @@
+import os
+import mlflow.sklearn
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+from pyspark.sql.utils import AnalysisException
+
+# =============================================================================
+# 1. CONFIGURAÇÕES GERAIS
+# =============================================================================
+PATH_MATRIZ_HISTORICO = "/dbfs/FileStore/ouvidoria/estado/X_historico.npz"
+TABELA_DELTA = "catalog.schema.reclamacoes_clusterizadas"
+URI_MODELO_MLFLOW = "models:/Vetorizador_Ouvidoria/Production"
+NOME_MODELO_REGISTRO = "Vetorizador_Ouvidoria"
+
+LIMIAR_SIMILARIDADE = 0.60
+EPS_EUCLIDIANO_FULL = 0.894 # Equivalente a 0.60 de similaridade de cosseno
+
+# =============================================================================
+# 2. FUNÇÕES DE PROCESSAMENTO
+# =============================================================================
+
+def executar_carga_full(df_pandas):
+    """Executa o processamento do Dia 0 (Carga Histórica de 50k+ registros)"""
+    print(f"Iniciando Carga FULL para {len(df_pandas)} registros...")
+    
+    # 1. Treinamento do TF-IDF e Registro no MLflow
+    vectorizer = TfidfVectorizer(max_features=10000) # Limite opcional para otimizar memória
+    X_historico = vectorizer.fit_transform(df_pandas['texto_limpo'])
+    
+    print("Registrando modelo base no MLflow...")
+    with mlflow.start_run(run_name="Carga_Full_Ouvidoria"):
+        mlflow.sklearn.log_model(vectorizer, "tfidf_model", registered_model_name=NOME_MODELO_REGISTRO)
+    
+    # 2. Clusterização Global com DBSCAN (Usando distância euclidiana em matriz esparsa)
+    print("Executando DBSCAN Global (Isso pode levar alguns minutos)...")
+    dbscan = DBSCAN(eps=EPS_EUCLIDIANO_FULL, min_samples=3, metric='euclidean')
+    clusters = dbscan.fit_predict(X_historico)
+    df_pandas['cluster_id'] = clusters
+    
+    # 3. Regra de Influencers Global (Multiplicação da matriz por ela mesma)
+    print("Calculando matriz de similaridade global para buscar influencers...")
+    # X * X.T gera uma matriz esparsa de N x N contendo as similaridades
+    matriz_sim_global = X_historico.dot(X_historico.T)
+    
+    # Extrai as coordenadas (linha, coluna) onde a similaridade >= 0.60
+    linhas, colunas = matriz_sim_global.nonzero()
+    valores = matriz_sim_global.data
+    
+    mask = valores >= LIMIAR_SIMILARIDADE
+    linhas_validas = linhas[mask]
+    colunas_validas = colunas[mask]
+    
+    is_influencer = np.zeros(len(df_pandas), dtype=bool)
+    
+    # Verifica CPFs distintos para os pares altamente similares
+    cpfs = df_pandas['cpf'].values
+    for l, c in zip(linhas_validas, colunas_validas):
+        if l != c and cpfs[l] != cpfs[c]:
+            is_influencer[l] = True
+            is_influencer[c] = True
+            
+    df_pandas['flg_influencer'] = is_influencer
+    
+    # 4. Salva o Estado
+    print("Salvando matriz de estado no DBFS...")
+    os.makedirs(os.path.dirname(PATH_MATRIZ_HISTORICO), exist_ok=True)
+    sp.save_npz(PATH_MATRIZ_HISTORICO, X_historico)
+    
+    return df_pandas
+
+def executar_carga_incremental(df_novos, df_historico, X_historico, vectorizer):
+    """Executa o processamento diário (Apenas os casos novos do dia)"""
+    print(f"Iniciando Carga INCREMENTAL para {len(df_novos)} novos registros...")
+    
+    # Define o ID máximo para novos clusters
+    max_cluster_id = df_historico['cluster_id'].max()
+    max_cluster_id = 0 if pd.isna(max_cluster_id) or max_cluster_id == -1 else max_cluster_id
+    
+    # 1. Transformação e Similaridade
+    X_novos = vectorizer.transform(df_novos['texto_limpo'])
+    similaridades = cosine_similarity(X_novos, X_historico)
+    
+    max_sim_indices = similaridades.argmax(axis=1)
+    max_sim_values = similaridades.max(axis=1)
+    
+    novos_clusters = []
+    is_influencer = []
+    indices_orfaos = []
+    
+    # 2. Regra de Herança e Influencers
+    for i in range(len(df_novos)):
+        sim_max = max_sim_values[i]
+        idx_hist = max_sim_indices[i]
+        
+        if sim_max >= LIMIAR_SIMILARIDADE:
+            novos_clusters.append(df_historico.iloc[idx_hist]['cluster_id'])
+            cpf_novo = df_novos.iloc[i]['cpf']
+            cpf_historico = df_historico.iloc[idx_hist]['cpf']
+            is_influencer.append(cpf_novo != cpf_historico)
+        else:
+            novos_clusters.append(-1)
+            is_influencer.append(False)
+            indices_orfaos.append(i)
+            
+    df_novos['cluster_id'] = novos_clusters
+    df_novos['flg_influencer'] = is_influencer
+    
+    # 3. DBSCAN Delta para Órfãos
+    if indices_orfaos:
+        print(f"Gerando novos clusters para {len(indices_orfaos)} casos órfãos...")
+        X_orfaos = X_novos[indices_orfaos]
+        dbscan = DBSCAN(eps=0.40, min_samples=3, metric='cosine') # 1 - 0.60
+        clusters_orfaos = dbscan.fit_predict(X_orfaos)
+        
+        for idx_orf, cluster_db in enumerate(clusters_orfaos):
+            idx_orig = indices_orfaos[idx_orf]
+            if cluster_db != -1:
+                df_novos.at[idx_orig, 'cluster_id'] = max_cluster_id + cluster_db + 1
+                
+    # 4. Atualiza e Salva o Estado
+    X_historico_atualizado = sp.vstack([X_historico, X_novos])
+    sp.save_npz(PATH_MATRIZ_HISTORICO, X_historico_atualizado)
+    
+    return df_novos
+
+# =============================================================================
+# 3. ORQUESTRAÇÃO PRINCIPAL (VERIFICA SE É FULL OU INCREMENTAL)
+# =============================================================================
+
+# Verifica se a matriz de estado existe no DBFS
+is_primeira_execucao = not os.path.exists(PATH_MATRIZ_HISTORICO)
+
+if is_primeira_execucao:
+    print("ESTADO NÃO ENCONTRADO. Iniciando rotina de Dia 0 (Carga Full).")
+    
+    # Traz TODOS os dados da base crua para criar o histórico
+    # Substitua a query pela leitura da sua tabela raw
+    df_raw = spark.sql("SELECT id_reclamacao, cpf, texto_limpo FROM catalog.schema.reclamacoes_raw").toPandas()
+    
+    df_final = executar_carga_full(df_raw)
+    
+    # Salva a Tabela Delta pela primeira vez (Overwite)
+    spark.createDataFrame(df_final[['id_reclamacao', 'cpf', 'cluster_id', 'flg_influencer']]) \
+        .write.format("delta").mode("overwrite").saveAsTable(TABELA_DELTA)
+        
+    print("Carga Full concluída. Tabela Delta e Estado inicializados.")
+
+else:
+    print("ESTADO ENCONTRADO. Iniciando rotina Incremental.")
+    
+    try:
+        # Carrega o estado atual (Modelo, Matriz e Metadados)
+        vectorizer = mlflow.sklearn.load_model(URI_MODELO_MLFLOW)
+        X_historico = sp.load_npz(PATH_MATRIZ_HISTORICO)
+        df_historico = spark.read.table(TABELA_DELTA).select("id_reclamacao", "cpf", "cluster_id").toPandas()
+        
+        # Carrega apenas os dados novos de hoje
+        df_novos = spark.sql("SELECT id_reclamacao, cpf, texto_limpo FROM catalog.schema.reclamacoes_raw WHERE data_ingestao = CURRENT_DATE()").toPandas()
+        
+        if len(df_novos) == 0:
+            print("Nenhum registro novo hoje.")
+        else:
+            df_final = executar_carga_incremental(df_novos, df_historico, X_historico, vectorizer)
+            
+            # Faz o append dos resultados na Tabela Delta
+            spark.createDataFrame(df_final[['id_reclamacao', 'cpf', 'cluster_id', 'flg_influencer']]) \
+                .write.format("delta").mode("append").saveAsTable(TABELA_DELTA)
+                
+            print("Carga Incremental concluída.")
+            
+    except Exception as e:
+        print(f"Erro na execução incremental: {e}")
+        raise e
