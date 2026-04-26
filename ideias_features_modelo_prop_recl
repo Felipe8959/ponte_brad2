@@ -1,0 +1,51 @@
+Para elevar a precisão desse modelo de propensão, precisamos olhar além do "evento" e focar no **comportamento e no contexto**. Como estamos falando de uma "Instância Zero", o objetivo é capturar o **atrito acumulado**.
+
+Aqui estão sugestões de variáveis divididas por categorias, focando no que realmente costuma "mover o ponteiro" em modelos de CX e Ouvidoria:
+
+---
+
+## 1. Variáveis de Interação (O "Caminho do Rastro")
+Essas variáveis medem o esforço do cliente nos canais que compõem a Instância Zero.
+
+* **Velocidade de Transição entre Canais:** Tempo decorrido entre o uso do Totem e a entrada no Chat IA (quanto menor o tempo, maior a urgência/irritação).
+* **Recorrência por Motivo (Clusterização):** Quantas vezes o cliente acessou o Totem/URA pelo *mesmo* motivo nos últimos 7 e 30 dias.
+* **Taxa de Abandono de Fluxo:** Se o cliente encerrou a interação no Chat IA ou URA sem chegar à mensagem de "resolvido" ou "ajudou?".
+* **Sentimento via NLP (Chat IA):** Score de sentimento das últimas 3 frases. (Ex: Uso de palavras de baixo calão ou ameaças de órgãos reguladores como "BACEN" ou "Procon").
+* **Contagem de "Falar com Atendente":** Quantas vezes o cliente digitou ou disse palavras-chave de transbordo humano durante a interação na Instância Zero.
+
+## 2. Variáveis Transacionais e de Produto (O "Trigger" da Dor)
+Aqui olhamos para a vida financeira, onde o problema geralmente nasce.
+
+* **Taxa de Erro no PIX (Transacional):** Quantas transações de PIX falharam por "Erro de Sistema" vs. "Saldo Insuficiente" nas últimas 48h. Erros sistêmicos são preditores altíssimos de reclamação.
+* **Volatilidade de Saldo:** Queda brusca no saldo médio da conta corrente (pode indicar que o cliente está retirando o dinheiro por insatisfação ou medo).
+* **Status de Inadimplência (Dias de Atraso):** Clientes com atrasos recentes (1 a 15 dias) costumam reclamar mais para tentar negociar tarifas ou juros.
+* **Uso de Limite de Emergência:** Frequência de entrada no cheque especial. O custo disso gera alta propensão a reclamações de "tarifas indevidas".
+
+## 3. Variáveis de Histórico e Perfil (A "Memória" do Atrito)
+O passado do cliente dita o quão "curta" é a paciência dele hoje.
+
+* **Recência da Última Reclamação Formal:** Se ele abriu uma reclamação nos últimos 6 meses, a probabilidade de reincidência é estatisticamente maior.
+* **Tempo de Casa (Tenure) vs. Atrito:** Clientes novos (menos de 1 ano) têm menos lealdade e reclamam/cancelam mais rápido por problemas iniciais.
+* **Product Penetration (Cross-sell):** Quantos produtos o cliente tem (Seguros, Cartão, Investimento). Estranhamente, clientes com muitos produtos podem reclamar mais por terem mais pontos de contato, mas são mais valiosos para a retenção.
+* **Variação de LTV (Lifetime Value):** Se o valor gerado pelo cliente para o banco está caindo, ele pode estar em processo de churn, e a reclamação é o "último adeus".
+
+## 4. Variáveis de Contexto Externo
+* **Bureau de Crédito (Score):** Queda repentina no score de crédito externo pode indicar estresse financeiro, o que torna o cliente mais sensível a qualquer erro tarifário do banco.
+* **Indexador de Reclamações Setoriais:** Se o motivo da interação (ex: instabilidade no App) está com alto volume de menções em redes sociais ou sites de reclamação no mesmo dia.
+
+---
+
+### Como avaliar a Importância das Variáveis (Feature Importance)
+
+Para um modelo de propensão, recomendo não olhar apenas para o `Feature Importance` padrão do XGBoost/LightGBM. Sugiro:
+
+1.  **SHAP Values:** Fundamental para entender a **direção** do impacto. (Ex: "Ter 2 erros de PIX aumenta a probabilidade de reclamação em 15%").
+2.  **Information Value (IV) e Weight of Evidence (WoE):** Excelente para triagem inicial de variáveis categóricas e para entender o poder preditivo de cada uma em relação ao público de "Reclamantes" vs "Não Reclamantes".
+3.  **Permutation Importance:** Para garantir que o modelo não está viciado em uma variável que tem vazamento de dados (data leakage).
+
+### Exemplo de Engenharia de Variável (Feature Engineering)
+Uma variável que costuma ser "top tier" em modelos bancários é a **"Janela de Silêncio Pós-Atrito"**:
+> `dias_desde_erro_pix` / `dias_desde_ultima_interacao_instancia_zero`. 
+Se o cliente teve um erro e não interagiu mais, ele pode estar preparando a reclamação externa ou o encerramento da conta.
+
+**Qual dessas bases (PIX, Contas, URA) você sente que tem a maior "sujeira" nos dados hoje para a gente pensar em como limpar antes de rodar o modelo?**
