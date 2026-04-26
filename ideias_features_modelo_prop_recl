@@ -4,6 +4,15 @@ Alterar os gráficos mes, semana, dia para apenas um grafico e adicionar filtro 
 
 Adicionar HTML na tabela analítica
 
+Atualizar INFLUENCERS
+ - Utilizar MLFlow
+ - Criar notebook de testes de performance, exemplos:
+  - 1. Coerência Intra-cluster (Intra-cluster Similarity) Mede a similaridade média entre todos os pares de textos dentro do mesmo cluster. Quanto maior, mais coesos são os textos.
+  - 2. Separação Inter-cluster (Inter-cluster Distance) Mede a distância média entre clusters diferentes. Quanto maior, mais distintos são os clusters.
+  - 3. Topic Coherence (C_v ou NPMI) - Avalia se as palavras mais frequentes em cada cluster aparecem juntas nos textos. Usa TF-IDF para extrair termos-chave por cluster.
+  - 4. Davies-Bouldin Index - Quanto menor, melhor. Calcula a razão entre dispersão intra-cluster e separação inter-cluster.
+  - 5. Calinski-Harabasz Index - Quanto maior, melhor. Razão entre variância inter-cluster e intra-cluster.
+
 Criar modelo de propensão a reclamação pós instância zero
  - ideias no GitHub
 
