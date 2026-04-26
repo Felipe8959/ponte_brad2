@@ -1,0 +1,180 @@
+Como Cientista de Dados Sênior, meu foco não está apenas no dado bruto, mas no **atrito capturado pelo dado**. Para prever uma reclamação, precisamos identificar o "ruído" que antecede a "explosão". Abaixo, apresento um conjunto de 30 variáveis de alta performance, estruturadas para alimentar modelos de *Machine Learning* (como XGBoost, LightGBM ou Redes Neurais Transacionais) com foco na sua **Instância Zero**.
+
+---
+
+## 1. CATEGORIA: ATRITO NA JORNADA (INSTÂNCIA ZERO)
+
+**1. Taxa de Reiteração em Canais Automáticos (24h)**
+* **Descrição:** Quantidade de vezes que o cliente acessou URA/Chat/Totem pelo mesmo motivo em 24h.
+* **Como calcular:** `Count(Interações) WHERE motivo_id = id_anterior AND timestamp <= 24h`
+* **Fonte:** Logs de URA, Chat IA, Totem.
+* **Hipótese:** Reiteração indica que a solução automática falhou, gerando frustração imediata.
+* **Tipo:** Numérica.
+
+**2. Velocidade de Transição Multicanal (Hoping Speed)**
+* **Descrição:** Tempo decorrido entre a saída de um canal digital e a entrada na URA.
+* **Como calcular:** `Timestamp(Entrada_URA) - Timestamp(Saída_Chat/App)`
+* **Fonte:** Logs de navegação App/Web + Logs de Telefonia.
+* **Hipótese:** Transições rápidas (< 10 min) indicam abandono por incapacidade do canal digital em resolver o problema.
+* **Tipo:** Numérica (Segundos).
+
+**3. Índice de "Loop" na URA/Totem**
+* **Descrição:** Identifica se o cliente passou pelo mesmo menu mais de 2 vezes na mesma sessão.
+* **Como calcular:** `Count(menu_id) / Count_Distinct(menu_id) por sessão`
+* **Fonte:** Logs de URA e Totem.
+* **Hipótese:** O cliente está perdido na árvore de decisão ou a opção desejada não existe.
+* **Tipo:** Numérica (Ratio).
+
+**4. Sentimento Médio das Interações em Chat IA (NLP)**
+* **Descrição:** Score de sentimento das últimas 3 frases do cliente no chat.
+* **Como calcular:** `Score de análise de sentimento (VADER/BERT) das strings de entrada`
+* **Fonte:** Logs de Chat IA.
+* **Hipótese:** Palavras de baixo calão ou termos de urgência ("Procon", "Justiça") são preditores diretos.
+* **Tipo:** Numérica (0 a 1).
+
+**5. Abandono de Fluxo de Autoatendimento Crítico**
+* **Descrição:** Binário que indica se o cliente fechou o chat ou desligou a URA em um menu de "Contestação" ou "Cancelamento".
+* **Como calcular:** `IF (último_menu IN ('contestação', 'cancelamento') AND status = 'não_concluído') THEN 1 ELSE 0`
+* **Fonte:** Workflow de Chat e URA.
+* **Hipótese:** O abandono em fluxos críticos sem resolução é o passo anterior à Ouvidoria.
+* **Tipo:** Binária.
+
+**6. Tempo de Latência de Resposta da IA (Percepção de Esforço)**
+* **Descrição:** Tempo médio que a IA demora para processar e responder o cliente.
+* **Como calcular:** `Média(Timestamp_Resposta - Timestamp_Pergunta)`
+* **Fonte:** Logs de Chat IA.
+* **Hipótese:** Delays na interação digital aumentam a irritabilidade do cliente.
+* **Tipo:** Numérica.
+
+---
+
+## 2. CATEGORIA: COMPORTAMENTO TRANSACIONAL E FINANCEIRO (PIX/CONTA)
+
+**7. Taxa de Erros de PIX por Motivos Técnicos (7 dias)**
+* **Descrição:** Proporção de transações PIX não concluídas por erro de timeout ou sistema.
+* **Como calcular:** `Count(PIX_Error) / Count(PIX_Attempts)`
+* **Fonte:** Base Transacional PIX.
+* **Hipótese:** Falha em transações financeiras instantâneas gera pânico e reclamação imediata.
+* **Tipo:** Numérica (Percentual).
+
+**8. Volatilidade de Saldo em Conta Corrente**
+* **Descrição:** Desvio padrão do saldo nos últimos 30 dias comparado com a média histórica.
+* **Como calcular:** `StdDev(Saldo_30d) / Média(Saldo_Histórico)`
+* **Fonte:** Base de Correntistas.
+* **Hipótese:** Mudanças bruscas de saldo (saídas não planejadas) geram pedidos de explicação na Ouvidoria.
+* **Tipo:** Numérica.
+
+**9. Recorrência de Uso de Limite Emergencial (Cheque Especial)**
+* **Descrição:** Número de dias consecutivos que o cliente entrou no limite no último mês.
+* **Como calcular:** `Count_Consecutive(Dias onde Saldo < 0)`
+* **Fonte:** Base de Correntistas.
+* **Hipótese:** Clientes sob estresse financeiro são mais propensos a reclamar de tarifas e juros.
+* **Tipo:** Numérica.
+
+**10. Delta de Gastos em Cartão vs. Média (Anomalia de Consumo)**
+* **Descrição:** Diferença percentual entre a fatura atual e a média das últimas 6 faturas.
+* **Como calcular:** `(Fatura_Atual - Média_6m) / Média_6m`
+* **Fonte:** Base de Cartões.
+* **Hipótese:** Faturas muito acima do padrão geram contestações preventivas.
+* **Tipo:** Numérica.
+
+**11. Falha em Agendamento de Pagamentos (Boletos/Débito Automático)**
+* **Descrição:** Indica se houve falha por falta de saldo ou erro sistêmico em pagamentos agendados.
+* **Como calcular:** `Flag(Falha_Agendamento_T-1)`
+* **Fonte:** Base Transacional.
+* **Hipótese:** O cliente se sente prejudicado por juros de terceiros devido a falhas do banco.
+* **Tipo:** Binária.
+
+---
+
+## 3. CATEGORIA: ENGAJAMENTO E HISTÓRICO (RELACIONAL)
+
+**12. Recência da Última Reclamação Formal (L30D)**
+* **Descrição:** Dias desde a última reclamação aberta em qualquer canal oficial.
+* **Como calcular:** `Data_Atual - Max(Data_Reclamação)`
+* **Fonte:** CRM / Histórico de Ouvidoria.
+* **Hipótese:** Clientes que reclamaram recentemente têm um "gatilho" mais curto para novas reclamações (comportamento de detrator).
+* **Tipo:** Numérica (Dias).
+
+**13. Densidade de Contatos no Ciclo de Faturamento**
+* **Descrição:** Quantidade de contatos feitos na semana de fechamento da fatura/extrato.
+* **Como calcular:** `Count(Interações) WHERE data IN (Janela_Fechamento)`
+* **Fonte:** Interações + Base de Cartões.
+* **Hipótese:** Dúvidas sobre faturamento que não são sanadas rapidamente escalam para a Ouvidoria.
+* **Tipo:** Numérica.
+
+**14. Ratio de Resolução no Primeiro Contato (FCR Estimado)**
+* **Descrição:** Percentual de interações que não geraram um novo contato em 48h.
+* **Como calcular:** `1 - (Interações_Seguidas_48h / Total_Interações)`
+* **Fonte:** Logs de Atendimento.
+* **Hipótese:** Baixo FCR é o maior driver de insatisfação estrutural.
+* **Tipo:** Numérica (0 a 1).
+
+**15. Idade da Conta vs. Complexidade da Carteira**
+* **Descrição:** Tempo de casa cruzado com o número de produtos ativos.
+* **Como calcular:** `Dias_Conta_Ativa * Count(Produtos_Ativos)`
+* **Fonte:** CRM / Base de Clientes.
+* **Hipótese:** Clientes antigos com muitos produtos sentem-se "traídos" mais facilmente se houver atrito.
+* **Tipo:** Numérica.
+
+---
+
+## 4. CATEGORIA: FEATURES DERIVADAS E COMBINADAS (ADVANCED)
+
+**16. Flag de "Silêncio Após Conflito"**
+* **Descrição:** Identifica clientes que tiveram uma interação negativa no Chat/URA e não realizaram mais transações desde então.
+* **Como calcular:** `IF (Score_Sentimento < 0.3 AND Count_Transações_Post_Atendimento = 0) THEN 1 ELSE 0`
+* **Fonte:** Chat IA + Transacional.
+* **Hipótese:** O silêncio após o atrito é o prenúncio do *Churn* ou de uma ação judicial/ouvidoria.
+* **Tipo:** Binária.
+
+**17. Intensidade de Busca por Termos Sensíveis no App**
+* **Descrição:** Frequência de termos como "cancelar", "taxa", "reclamar", "juizado" na barra de busca.
+* **Como calcular:** `Count(Termos_Chave) nos últimos 7 dias`
+* **Fonte:** Logs de Busca (Search Logs).
+* **Hipótese:** Revela a intenção do cliente antes mesmo de ele falar com um atendente.
+* **Tipo:** Numérica.
+
+**18. Desvio de Comportamento no Totem (Anomalia Geográfica)**
+* **Descrição:** Uso do totem fora do horário comercial em agências com alto índice de reclamação.
+* **Como calcular:** `Flag(Uso_Totem_Night AND Agencia_Risco_Alto)`
+* **Fonte:** Logs de Totem + Cadastro de Agências.
+* **Hipótese:** Problemas em autoatendimento físico durante horários sem suporte humano geram maior urgência.
+* **Tipo:** Binária.
+
+**19. Concentração de Interações em Horários de Pico de Instabilidade**
+* **Descrição:** Cruzamento entre o horário da interação do cliente e momentos de lentidão sistêmica registrada.
+* **Como calcular:** `Interação_Timestamp OVERLAP Instabilidade_Sistêmica_Log`
+* **Fonte:** Logs de Canal + Logs de TI (Infrastructure).
+* **Hipótese:** O cliente foi afetado por um erro sistêmico coletivo, aumentando a propensão.
+* **Tipo:** Binária.
+
+**20. Score de Risco Social (Base Externa - Opcional)**
+* **Descrição:** Índice de reclamações de pessoas com o mesmo perfil demográfico/região no Reclame Aqui/Consumidor.gov.
+* **Como calcular:** `Média(Reclamações_Externas) por Cluster de CEP/Idade`
+* **Fonte:** Bases Externas + Cadastro de Cliente.
+* **Hipótese:** Efeitos de manada ou problemas regionais (ex: queda de luz, greve) influenciam a propensão.
+* **Tipo:** Numérica.
+
+---
+
+### MÉTODOS DE AVALIAÇÃO E PERFORMANCE DO MODELO
+
+#### 1. Avaliação de Importância (Feature Importance)
+* **SHAP (Shapley Additive Explanations):** Essencial para modelos de CX. Ele permite explicar para a área de negócio exatamente *por que* o cliente X recebeu um flag de alta propensão (ex: "O risco subiu 20% porque ele errou o PIX 3 vezes e entrou na URA em seguida").
+* **Permutation Importance:** Útil para entender a queda na performance do modelo ao remover uma variável, ajudando a limpar o modelo de "ruídos".
+
+#### 2. Variáveis com Maior Poder Preditivo (Tendência)
+* **Variáveis Temporais de Curto Prazo (Recência):** O que aconteceu nas últimas 4 horas é 10x mais preditivo do que o que aconteceu há 1 ano.
+* **Variáveis de Sentimento/NLP:** A forma como o cliente se expressa na "Instância Zero" é o sinal mais rico de intenção.
+* **Variáveis de Esforço (Loops/Hoping):** Medir o cansaço do cliente no canal automático.
+
+#### 3. Como Evitar Overfitting e Redundância
+* **Análise de Correlação (Multicolinearidade):** Utilizar o *Variance Inflation Factor* (VIF) ou Matriz de Correlação de Spearman. Se "Número de Contatos" e "Número de Logins" tiverem correlação > 0.9, mantenha apenas a que tiver maior correlação com o alvo (*target*).
+* **Cross-Validation Temporal (Time-Series Split):** Nunca use K-Fold aleatório para séries temporais. Treine no passado e valide no futuro próximo para garantir que o modelo não está "decorando" padrões sazonais.
+* **Feature Selection (RFE):** Utilizar *Recursive Feature Elimination* para manter apenas o "Core" de 15-20 variáveis que realmente movem o ponteiro do AUC/ROC.
+
+---
+
+### PRÓXIMO PASSO SUGERIDO:
+Recomendo a criação de um **"Feature Store"** centralizado, onde essas variáveis de "Instância Zero" sejam calculadas em *near real-time* (streaming com Flink ou Spark Streaming), permitindo que o modelo dispare o alerta para o time de retenção em menos de 1 minuto após o atrito detectado.
