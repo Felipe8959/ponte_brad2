@@ -1,3 +1,20 @@
+Criar modelo de propensão a reclamação pós instância zero
+ - ideias no GitHub
+
+Criar agente que tira duvidas sobre o painel de Instância Zero.
+ - Utilizar o genie agente do databricks
+ - o agente devera responder ao usuário, como fazer determinado filtro no dash
+ - exemplo: "preciso saber quantos clientes reclamaram sobre contestação PIX no canal BACEN no primeiro tri de 2026"
+ - ele deverá fazer os filtros e indicar em que gráfico/card esta a informação que a pessoa precisa
+ - também deverá retornar os filtros que ele fez organizadamente.
+ - DEVERA TER SQL FUNCTIONS NO CATALOGO PARA DAR CONTEXTO DE ONDE FILTRAR CADA PEDIDO.
+
+Criar SQL Function (UDF)
+ - CREATE OR REPLACE FUNCTION
+ - só precisamos chama-las na query
+
+------------------------------------------------------------------------------------------------
+
 Para elevar a precisão desse modelo de propensão, precisamos olhar além do "evento" e focar no **comportamento e no contexto**. Como estamos falando de uma "Instância Zero", o objetivo é capturar o **atrito acumulado**.
 
 Aqui estão sugestões de variáveis divididas por categorias, focando no que realmente costuma "mover o ponteiro" em modelos de CX e Ouvidoria:
